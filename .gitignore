@@ -1,0 +1,26 @@
+# Python / server
+.venv/
+__pycache__/
+*.pyc
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project secrets
+.env
+
+# MacOS
+.DS_Store
+
+# Flutter (if managing the client from root)
+/client/build/
+/client/.dart_tool/
+/client/.flutter-plugins
+/client/.flutter-plugins-dependencies
+/client/.pub-cache/
+/client/.pub/
+/client/android/app/src/main/res/values/secrets.xml
+/client/ios/Pods/
