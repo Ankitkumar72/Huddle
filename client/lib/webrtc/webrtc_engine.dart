@@ -4,7 +4,6 @@ import '../signaling/signaling_service.dart';
 
 class WebRtcEngine {
   final SignalingService _signaling;
-  final String _roomCode;
   
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
@@ -18,9 +17,7 @@ class WebRtcEngine {
   Function()? onRemoteStreamReady;
   Function(String)? onError;
 
-  WebRtcEngine({required SignalingService signaling, required String roomCode})
-      : _signaling = signaling,
-        _roomCode = roomCode;
+  WebRtcEngine({required SignalingService signaling}) : _signaling = signaling;
 
   Future<void> initialize(RTCVideoRenderer local, RTCVideoRenderer remote) async {
     localRenderer = local;

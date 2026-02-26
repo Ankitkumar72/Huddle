@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../signaling/signaling_service.dart';
 import '../webrtc/webrtc_engine.dart';
@@ -30,14 +31,17 @@ class _CallScreenState extends State<CallScreen> {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
 
-    // 2. Setup SignalingService pointing to our local or remote Phase 1 server
+    final signalingUrl =
+        (dotenv.env['SIGNALING_URL'] ?? 'ws://127.0.0.1:8080').trim();
+
+    // 2. Setup SignalingService pointing to local/LAN/tunnel signaling server
     final signaling = SignalingService(
-      url: 'ws://127.0.0.1:8080', // Replace with Cloudflare URL for real device testing
+      url: signalingUrl,
       room: widget.roomCode,
     );
 
     // 3. Initialize Engine
-    _engine = WebRtcEngine(signaling: signaling, roomCode: widget.roomCode);
+    _engine = WebRtcEngine(signaling: signaling);
     
     _engine.onLocalStreamReady = () {
       if (mounted) setState(() {});
