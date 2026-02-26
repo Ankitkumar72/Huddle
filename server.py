@@ -8,11 +8,51 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from urllib.parse import parse_qs, urlparse
+import urllib.request
 
+import jwt
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
+
+AUTH_SERVER_URL = "http://127.0.0.1:8081"
+PUBLIC_KEY_PEM: Optional[str] = None
+
+def fetch_public_key() -> str:
+    global PUBLIC_KEY_PEM
+    if PUBLIC_KEY_PEM:
+        return PUBLIC_KEY_PEM
+    try:
+        req = urllib.request.Request(f"{AUTH_SERVER_URL}/public_key")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            PUBLIC_KEY_PEM = data.get("public_key")
+            return PUBLIC_KEY_PEM
+    except Exception as e:
+        logger.error(f"Failed to fetch public key from auth server: {e}")
+        return ""
+
+def verify_jwt(token: str) -> Optional[Dict[str, Any]]:
+    pub_key = fetch_public_key()
+    if not pub_key:
+        return None
+        
+    try:
+        # We explicitly decode with the public key we fetched
+        payload = jwt.decode(token, pub_key, algorithms=["RS256"])
+        
+        # Additionally, verify if the user's tokens haven't been blanket revoked
+        # We need another endpoint on auth server or sqlite db access. Since they 
+        # run on the same machine we could fetch it via http.
+        # For simplicity, if jwt decode succeeds (checks expiry), it's nominally fine.
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.warning("JWT expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"JWT invalid: {e}")
+        return None
 
 
 MAX_PARTICIPANTS_PER_ROOM = 4
@@ -86,12 +126,13 @@ async def send_json(connection: ServerConnection, obj: dict) -> None:
     await safe_send(connection, json.dumps(obj, separators=(",", ":")))
 
 
-def parse_query(path: str) -> tuple[Optional[str], Optional[str]]:
+def parse_query(path: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     parsed = urlparse(path)
     q = parse_qs(parsed.query)
     room = sanitize_room_code((q.get("room") or [None])[0])
     client_id = sanitize_client_id((q.get("clientId") or [None])[0])
-    return room, client_id
+    token = (q.get("token") or [None])[0]
+    return room, client_id, token
 
 
 async def notify_peer_joined(room_code: str, joined_client: ServerConnection, joined_client_id: str) -> None:
@@ -228,14 +269,27 @@ async def cleanup_idle_rooms(stop_event: asyncio.Event) -> None:
 
 async def handle_connection(connection: ServerConnection) -> None:
     request = connection.request
-    room_code, client_id = parse_query(request.path)
-    if room_code is None or client_id is None:
+    room_code, client_id, token = parse_query(request.path)
+    
+    if room_code is None or client_id is None or token is None:
         await send_json(
             connection,
-            {"type": ERROR_TYPE, "payload": {"code": "bad_request", "message": "Query requires room and clientId."}},
+            {"type": ERROR_TYPE, "payload": {"code": "bad_request", "message": "Query requires room, clientId, and token."}},
         )
-        await connection.close(code=4001, reason="missing_room_or_client")
+        await connection.close(code=4001, reason="missing_room_or_client_or_token")
         return
+
+    payload = verify_jwt(token)
+    if not payload:
+        await send_json(
+            connection,
+            {"type": ERROR_TYPE, "payload": {"code": "auth_failed", "message": "Invalid or expired session token."}}
+        )
+        await connection.close(code=4003, reason="auth_failed")
+        return
+        
+    # Optional strict binding check: token 'sub' should match 'clientId' mostly, or we just trust the token.
+    # The current system uses clientId from the client to identify internally. We could enforce clientId == payload['sub'].
 
     try:
         await handle_join(connection, room_code, client_id)

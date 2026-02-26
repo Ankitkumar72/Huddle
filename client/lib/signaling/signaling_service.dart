@@ -5,6 +5,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'signaling_shield.dart';
 
+import '../auth/session_manager.dart';
+
 class SignalingService {
   final String _url;
   final String _room;
@@ -30,8 +32,14 @@ class SignalingService {
 
   String get clientId => _clientId;
 
-  void connect() {
-    final uri = Uri.parse('$_url/?room=$_room&clientId=$_clientId');
+  Future<void> connect() async {
+    final token = await SessionManager.getToken();
+    if (token == null) {
+      onError?.call('No valid session found. Please login.');
+      return;
+    }
+
+    final uri = Uri.parse('$_url/?room=$_room&clientId=$_clientId&token=$token');
     debugPrint('Connecting WebSocket to ${uri.toString()}');
     
     try {
