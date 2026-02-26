@@ -1,5 +1,6 @@
 # Python / server
 .venv/
+venv/
 __pycache__/
 *.pyc
 
@@ -11,6 +12,17 @@ __pycache__/
 
 # Project secrets
 .env
+client/.env
+
+# JWT keys (auth server)
+auth_private_key.pem
+auth_public_key.pem
+
+# Auth database
+auth.db
+
+# Server logs
+*.log
 
 # MacOS
 .DS_Store

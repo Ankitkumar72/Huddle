@@ -26,12 +26,18 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _checkExistingSession() async {
-    final hasSession = await SessionManager.hasValidSession();
-    if (hasSession && mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
-      );
-    } else {
+    try {
+      final hasSession = await SessionManager.hasValidSession();
+      if (hasSession && mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+        return;
+      }
+    } catch (e) {
+      debugPrint('Session check failed: $e');
+    }
+    if (mounted) {
       setState(() {
         _isLoading = false;
       });

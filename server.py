@@ -18,16 +18,22 @@ from websockets.exceptions import ConnectionClosed
 
 AUTH_SERVER_URL = "http://127.0.0.1:8081"
 PUBLIC_KEY_PEM: Optional[str] = None
+PUBLIC_KEY_LAST_FETCHED_AT = 0.0
+PUBLIC_KEY_CACHE_TTL_SECONDS = 60
 
-def fetch_public_key() -> str:
-    global PUBLIC_KEY_PEM
-    if PUBLIC_KEY_PEM:
+
+def fetch_public_key(force_refresh: bool = False) -> str:
+    global PUBLIC_KEY_PEM, PUBLIC_KEY_LAST_FETCHED_AT
+    now = time.time()
+    cache_is_fresh = PUBLIC_KEY_PEM and (now - PUBLIC_KEY_LAST_FETCHED_AT) < PUBLIC_KEY_CACHE_TTL_SECONDS
+    if not force_refresh and cache_is_fresh:
         return PUBLIC_KEY_PEM
     try:
         req = urllib.request.Request(f"{AUTH_SERVER_URL}/public_key")
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
             PUBLIC_KEY_PEM = data.get("public_key")
+            PUBLIC_KEY_LAST_FETCHED_AT = now
             return PUBLIC_KEY_PEM
     except Exception as e:
         logger.error(f"Failed to fetch public key from auth server: {e}")
@@ -52,6 +58,16 @@ def verify_jwt(token: str) -> Optional[Dict[str, Any]]:
         return None
     except jwt.InvalidTokenError as e:
         logger.warning(f"JWT invalid: {e}")
+        # Auth server may have rotated/restarted; refresh key and retry once.
+        refreshed_key = fetch_public_key(force_refresh=True)
+        if refreshed_key and refreshed_key != pub_key:
+            try:
+                return jwt.decode(token, refreshed_key, algorithms=["RS256"])
+            except jwt.ExpiredSignatureError:
+                logger.warning("JWT expired after refresh")
+                return None
+            except jwt.InvalidTokenError as refresh_err:
+                logger.warning(f"JWT still invalid after key refresh: {refresh_err}")
         return None
 
 

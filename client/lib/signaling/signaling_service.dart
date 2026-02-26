@@ -1,65 +1,70 @@
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../auth/session_manager.dart';
 import 'signaling_shield.dart';
 
-import '../auth/session_manager.dart';
+typedef JsonMessageHandler = FutureOr<void> Function(Map<String, dynamic>);
+typedef PeerHandler = FutureOr<void> Function(String peerId);
+typedef ErrorHandler = FutureOr<void> Function(String error);
 
 class SignalingService {
   final String _url;
   final String _room;
   final String _clientId;
-  
+
   WebSocketChannel? _channel;
-  
+
   // Callbacks for events
-  Function(Map<String, dynamic>)? onOffer;
-  Function(Map<String, dynamic>)? onAnswer;
-  Function(Map<String, dynamic>)? onIceCandidate;
-  Function(String peerId)? onPeerJoined;
-  Function(String peerId)? onPeerLeft;
-  Function(String error)? onError;
+  JsonMessageHandler? onOffer;
+  JsonMessageHandler? onAnswer;
+  JsonMessageHandler? onIceCandidate;
+  PeerHandler? onPeerJoined;
+  PeerHandler? onPeerLeft;
+  ErrorHandler? onError;
 
   SignalingService({
     required String url,
     required String room,
     String? clientId,
-  })  : _url = url,
-        _room = room,
-        _clientId = clientId ?? const Uuid().v4();
+  }) : _url = url,
+       _room = room,
+       _clientId = clientId ?? const Uuid().v4();
 
   String get clientId => _clientId;
 
   Future<void> connect() async {
     final token = await SessionManager.getToken();
     if (token == null) {
-      onError?.call('No valid session found. Please login.');
+      await _emitError('No valid session found. Please login.');
       return;
     }
 
     final uri = Uri.parse('$_url/?room=$_room&clientId=$_clientId&token=$token');
     debugPrint('Connecting WebSocket to ${uri.toString()}');
-    
+
     try {
       _channel = WebSocketChannel.connect(uri);
-      
+
       _channel!.stream.listen(
         (message) {
-          _handleIncomingMessage(message.toString());
+          unawaited(_handleIncomingMessage(message.toString()));
         },
         onDone: () {
           debugPrint('WebSocket closed');
         },
         onError: (error) {
           debugPrint('WebSocket error: $error');
-          onError?.call(error.toString());
+          unawaited(_emitError(error.toString()));
         },
       );
     } catch (e) {
       debugPrint('Error connecting: $e');
-      onError?.call(e.toString());
+      await _emitError(e.toString());
     }
   }
 
@@ -68,73 +73,95 @@ class SignalingService {
     _channel = null;
   }
 
-  void _handleIncomingMessage(String rawMessage) {
-    // The server routing events `peer_joined` and `peer_left`, and `error` are sent as plain JSON.
-    // However, the P2P messages (offer, answer, ice_candidate) from peers are AES encrypted.
-    // The server itself formats peer_joined/left. Let's try parsing as raw JSON first.
-    // Server events format: {"type": "peer_joined", "senderId": "server", ...}
-    // So we first attempt to decode. If it fails or it's unknown, maybe it's ciphertext.
-    // Actually, based on Phase 1, the server sends unencrypted `peer_joined` and `peer_left` 
-    // JSON objects. But peer messages will be fully encrypted gibberish because the server 
-    // just relays what it gets. So let's handle the server messages vs peer messages.
-    
-    Map<String, dynamic>? decodedJson;
+  Future<void> _handleIncomingMessage(String rawMessage) async {
     try {
-      decodedJson = jsonDecode(rawMessage) as Map<String, dynamic>;
-      
-      // If it has senderId == "server", handle it directly.
-      if (decodedJson['senderId'] == 'server') {
-        _handleServerEvent(decodedJson);
-        return;
-      } else if (decodedJson['type'] == 'error') {
-        debugPrint('Server error: ${decodedJson['payload']}');
-        onError?.call(decodedJson['payload']['message'] ?? 'Unknown error');
+      try {
+        final decoded = jsonDecode(rawMessage);
+        if (decoded is Map) {
+          final decodedJson = decoded.map(
+            (key, value) => MapEntry(key.toString(), value),
+          );
+
+          if (decodedJson['senderId'] == 'server') {
+            await _handleServerEvent(decodedJson);
+            return;
+          }
+
+          if (decodedJson['type'] == 'error') {
+            final payload = decodedJson['payload'];
+            String message = 'Unknown error';
+            if (payload is Map && payload['message'] is String) {
+              message = payload['message'] as String;
+            }
+            debugPrint('Server error: $message');
+
+            if (payload is Map && payload['code'] == 'auth_failed') {
+              await SessionManager.clearToken();
+            }
+
+            await _emitError(message);
+            return;
+          }
+        }
+      } catch (_) {
+        // Not plain JSON; likely encrypted payload.
+      }
+
+      final decryptedStr = SignalingShield.decryptPayload(rawMessage);
+      if (decryptedStr == null) {
+        debugPrint('Failed to decrypt or parse incoming message');
         return;
       }
-    } catch (e) {
-      // Not raw JSON, so it must be an encrypted peer message.
-      decodedJson = null;
-    }
 
-    // Attempt decryption
-    final decryptedStr = SignalingShield.decryptPayload(rawMessage);
-    if (decryptedStr == null) {
-      // We either failed to decrypt, or it wasn't valid. Ignore.
-      debugPrint('Failed to decrypt or parsing error incoming message');
+      final decryptedJson = jsonDecode(decryptedStr);
+      if (decryptedJson is! Map) {
+        debugPrint('Decrypted payload was not a JSON object');
+        return;
+      }
+
+      await _handlePeerMessage(
+        decryptedJson.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    } catch (e, st) {
+      debugPrint('Unhandled signaling message error: $e\n$st');
+      await _emitError('Signaling parse/dispatch failed');
+    }
+  }
+
+  Future<void> _handleServerEvent(Map<String, dynamic> event) async {
+    final type = event['type'];
+    final rawPayload = event['payload'];
+    if (rawPayload is! Map) {
       return;
     }
 
-    try {
-      final decryptedJson = jsonDecode(decryptedStr) as Map<String, dynamic>;
-      _handlePeerMessage(decryptedJson);
-    } catch (e) {
-      debugPrint('Decrypted string was not valid JSON: $e');
+    final payload = rawPayload.map((key, value) => MapEntry(key.toString(), value));
+    final peerId = payload['peerId'];
+    if (peerId is! String || peerId.isEmpty) {
+      return;
     }
-  }
 
-  void _handleServerEvent(Map<String, dynamic> event) {
-    final type = event['type'];
-    final payload = event['payload'] as Map<String, dynamic>;
-    final peerId = payload['peerId'] as String;
-    
     if (type == 'peer_joined') {
-      onPeerJoined?.call(peerId);
+      await _callPeerHandler(onPeerJoined, peerId, 'peer_joined');
     } else if (type == 'peer_left') {
-      onPeerLeft?.call(peerId);
+      await _callPeerHandler(onPeerLeft, peerId, 'peer_left');
     }
   }
 
-  void _handlePeerMessage(Map<String, dynamic> message) {
+  Future<void> _handlePeerMessage(Map<String, dynamic> message) async {
     final type = message['type'];
+
     if (type == 'offer') {
-      onOffer?.call(message);
+      await _callJsonHandler(onOffer, message, 'offer');
     } else if (type == 'answer') {
-      onAnswer?.call(message);
+      await _callJsonHandler(onAnswer, message, 'answer');
     } else if (type == 'ice_candidate') {
-      onIceCandidate?.call(message);
+      await _callJsonHandler(onIceCandidate, message, 'ice_candidate');
     } else if (type == 'peer_left') {
-       // From Phase 4/6: local peer leaving
-      onPeerLeft?.call(message['senderId']);
+      final senderId = message['senderId'];
+      if (senderId is String && senderId.isNotEmpty) {
+        await _callPeerHandler(onPeerLeft, senderId, 'peer_left');
+      }
     } else {
       debugPrint('Unknown peer message type: $type');
     }
@@ -151,7 +178,7 @@ class SignalingService {
   void sendIceCandidate(String targetId, Map<String, dynamic> candidate) {
     _sendEncryptedMessage('ice_candidate', targetId, candidate);
   }
-  
+
   void sendPeerLeft() {
     _sendEncryptedMessage('peer_left', '*', {});
   }
@@ -168,9 +195,55 @@ class SignalingService {
 
     final jsonStr = jsonEncode(envelope);
     final encrypted = SignalingShield.encryptPayload(jsonStr);
-    
-    if (encrypted.isNotEmpty) {
+
+    if (encrypted.isEmpty) return;
+
+    try {
       _channel!.sink.add(encrypted);
+    } catch (e) {
+      debugPrint('Failed to send signaling message: $e');
+      unawaited(_emitError('Failed to send signaling message'));
+    }
+  }
+
+  Future<void> _callJsonHandler(
+    JsonMessageHandler? handler,
+    Map<String, dynamic> message,
+    String label,
+  ) async {
+    if (handler == null) return;
+
+    try {
+      await handler(message);
+    } catch (e, st) {
+      debugPrint('Handler error [$label]: $e\n$st');
+      await _emitError('Signaling handler failed for $label');
+    }
+  }
+
+  Future<void> _callPeerHandler(
+    PeerHandler? handler,
+    String peerId,
+    String label,
+  ) async {
+    if (handler == null) return;
+
+    try {
+      await handler(peerId);
+    } catch (e, st) {
+      debugPrint('Peer handler error [$label]: $e\n$st');
+      await _emitError('Signaling peer handler failed for $label');
+    }
+  }
+
+  Future<void> _emitError(String error) async {
+    final handler = onError;
+    if (handler == null) return;
+
+    try {
+      await handler(error);
+    } catch (e) {
+      debugPrint('Error handler threw: $e');
     }
   }
 }
