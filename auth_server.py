@@ -14,6 +14,7 @@ from webauthn import (
     verify_registration_response,
     generate_authentication_options,
     verify_authentication_response,
+    options_to_json,
 )
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
@@ -301,7 +302,7 @@ def register_begin(req: RegisterBeginRequest):
     )
 
     registration_challenges[user_id] = options.challenge
-    return {"options": json.loads(options.json()), "user_id": user_id}
+    return {"options": json.loads(options_to_json(options)), "user_id": user_id}
 
 
 @app.post("/register/complete")
@@ -370,7 +371,7 @@ def login_begin(req: LoginBeginRequest):
     )
 
     authentication_challenges[user_id] = options.challenge
-    return {"options": json.loads(options.json()), "user_id": user_id}
+    return {"options": json.loads(options_to_json(options)), "user_id": user_id}
 
 
 @app.post("/login/complete")

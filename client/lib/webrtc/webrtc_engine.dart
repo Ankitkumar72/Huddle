@@ -250,9 +250,9 @@ class WebRtcEngine {
     _signaling.sendPeerLeft();
     _signaling.disconnect();
 
-    await _localStream?.dispose();
-    await _peerConnection?.dispose();
     remoteRenderer?.srcObject = null;
     localRenderer?.srcObject = null;
+    await _localStream?.dispose();
+    await _peerConnection?.dispose();
   }
 }
