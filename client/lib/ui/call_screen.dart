@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../signaling/signaling_service.dart';
 import '../webrtc/webrtc_engine.dart';
 
@@ -30,6 +31,14 @@ class _CallScreenState extends State<CallScreen> {
     // 1. Initialize Renderers
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
+
+    // 1.5 Request Permissions (Required for Android 11+ network monitoring)
+    await [
+      Permission.camera,
+      Permission.microphone,
+      Permission.bluetoothConnect,
+      Permission.location,
+    ].request();
 
     final signalingUrl =
         (dotenv.env['SIGNALING_URL'] ?? 'ws://127.0.0.1:8080').trim();

@@ -72,7 +72,7 @@ def verify_jwt(token: str) -> Optional[Dict[str, Any]]:
 
 
 MAX_PARTICIPANTS_PER_ROOM = 4
-MAX_MESSAGES_PER_SECOND = 10
+MAX_MESSAGES_PER_SECOND = 50
 ROOM_IDLE_EXPIRY_SECONDS = 2 * 60 * 60
 PEER_LEFT_TYPE = "peer_left"
 ERROR_TYPE = "error"
