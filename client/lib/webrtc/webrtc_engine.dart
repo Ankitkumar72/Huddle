@@ -15,7 +15,6 @@ class WebRtcEngine {
   int _discoveredWidth = 1280; // Default fallback candidate
   int _discoveredHeight = 720;
 
-
   // UI callbacks
   Function()? onLocalStreamReady;
   Function()? onRemoteStreamReady;
@@ -23,7 +22,10 @@ class WebRtcEngine {
 
   WebRtcEngine({required SignalingService signaling}) : _signaling = signaling;
 
-  Future<void> initialize(RTCVideoRenderer local, RTCVideoRenderer remote) async {
+  Future<void> initialize(
+    RTCVideoRenderer local,
+    RTCVideoRenderer remote,
+  ) async {
     localRenderer = local;
     remoteRenderer = remote;
 
@@ -68,27 +70,33 @@ class WebRtcEngine {
             'width': {'ideal': width},
             'height': {'ideal': height},
             'frameRate': {'ideal': 30},
-          }
+          },
         };
 
         _localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
+
         // Success! Record the actual resolution
         _discoveredWidth = width;
         _discoveredHeight = height;
-        debugPrint('Successfully opened camera at ${_discoveredWidth}x${_discoveredHeight}');
-        
+        debugPrint(
+          'Successfully opened camera at $_discoveredWidth x $_discoveredHeight',
+        );
+
         localRenderer?.srcObject = _localStream;
         onLocalStreamReady?.call();
         return; // Exit loop on success
       } catch (e) {
-        debugPrint('Failed to open camera at ${tier['width']}x${tier['height']}: $e');
+        debugPrint(
+          'Failed to open camera at ${tier['width']}x${tier['height']}: $e',
+        );
         // Continue to next lower tier
       }
     }
 
     // If all tiers fail
-    onError?.call('Could not access camera/microphone at any supported quality');
+    onError?.call(
+      'Could not access camera/microphone at any supported quality',
+    );
   }
 
   Future<void> _createPeerConnection() async {
@@ -173,7 +181,7 @@ class WebRtcEngine {
       final sdp = _optimizeSdp(offer.sdp!);
       final optimizedOffer = RTCSessionDescription(sdp, offer.type);
       await pc.setLocalDescription(optimizedOffer);
- 
+
       _signaling.sendOffer(peerId, {
         'sdp': optimizedOffer.sdp,
         'type': optimizedOffer.type,
@@ -213,10 +221,10 @@ class WebRtcEngine {
       await pc.setRemoteDescription(offerSession);
 
       final answer = await pc.createAnswer();
-      final sdp_optimized = _optimizeSdp(answer.sdp!);
-      final optimizedAnswer = RTCSessionDescription(sdp_optimized, answer.type);
+      final sdpOptimized = _optimizeSdp(answer.sdp!);
+      final optimizedAnswer = RTCSessionDescription(sdpOptimized, answer.type);
       await pc.setLocalDescription(optimizedAnswer);
- 
+
       _signaling.sendAnswer(senderId, {
         'sdp': optimizedAnswer.sdp,
         'type': optimizedAnswer.type,
@@ -293,17 +301,19 @@ class WebRtcEngine {
     await _localStream?.dispose();
     await _peerConnection?.dispose();
   }
- 
+
   String _optimizeSdp(String sdp) {
     // 1. Prefer Opus with low packet time (10ms instead of default 20ms)
     // 2. Add x-google-min-bitrate to prevent initial video lag
     List<String> lines = sdp.split('\r\n');
     List<String> optimized = [];
- 
+
     for (var line in lines) {
       optimized.add(line);
       if (line.startsWith('a=rtpmap:') && line.contains('opus/48000/2')) {
-        optimized.add('a=fmtp:${line.split(' ')[0].split(':')[1]} minptime=10;useinbandfec=1');
+        optimized.add(
+          'a=fmtp:${line.split(' ')[0].split(':')[1]} minptime=10;useinbandfec=1',
+        );
       }
       if (line.startsWith('a=mid:video')) {
         // Dynamic Bitrate Scaling based on discovered quality
@@ -321,11 +331,13 @@ class WebRtcEngine {
           startBitrate = 2500;
         }
 
-        optimized.add('b=AS:$maxBitrate'); 
-        optimized.add('a=fmtp:96 x-google-min-bitrate=$minBitrate;x-google-max-bitrate=$maxBitrate;x-google-start-bitrate=$startBitrate');
+        optimized.add('b=AS:$maxBitrate');
+        optimized.add(
+          'a=fmtp:96 x-google-min-bitrate=$minBitrate;x-google-max-bitrate=$maxBitrate;x-google-start-bitrate=$startBitrate',
+        );
       }
     }
- 
+
     return optimized.join('\r\n');
   }
 }
